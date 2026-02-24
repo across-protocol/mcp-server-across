@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.across.to)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(git init:*)",
+      "Bash(sudo chown:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}
