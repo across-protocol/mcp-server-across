@@ -14,4 +14,6 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 
+EXPOSE 8080
+
 ENTRYPOINT ["node", "dist/index.js"]

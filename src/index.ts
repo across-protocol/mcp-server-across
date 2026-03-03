@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createServer as createHttpServer } from "node:http";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { DocStore } from "./store.js";
 import { SearchEngine } from "./search.js";
 import { crawlDocs } from "./crawler.js";
-import { createServer } from "./server.js";
+import { createServer as createMcpServer } from "./server.js";
 
+const PORT = Number(process.env.PORT) || 8080;
 const RECRAWL_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 async function main() {
@@ -21,13 +23,32 @@ async function main() {
     searchEngine.index(store.getAllPages());
   }
 
-  // Create MCP server
-  const server = createServer(store, searchEngine);
+  // HTTP server — each request gets its own stateless MCP transport.
+  // store + searchEngine are shared singletons across all requests.
+  const httpServer = createHttpServer(async (req, res) => {
+    if (req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("OK");
+      return;
+    }
 
-  // Connect via stdio transport
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("[across-mcp] Server started on stdio transport");
+    if (req.url === "/mcp") {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // stateless — no session tracking needed
+      });
+      const mcpServer = createMcpServer(store, searchEngine);
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res);
+      return;
+    }
+
+    res.writeHead(404);
+    res.end("Not found");
+  });
+
+  httpServer.listen(PORT, () => {
+    console.error(`[across-mcp] HTTP server listening on port ${PORT}`);
+  });
 
   // Crawl in background if cache is stale or missing
   if (!loaded || store.pageCount() === 0 || store.needsRecrawl()) {
