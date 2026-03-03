@@ -1,6 +1,6 @@
 # mcp-server-across
 
-An MCP (Model Context Protocol) server that indexes [Across Protocol documentation](https://docs.across.to) and provides AI-powered tools for building cross-chain applications.
+An MCP (Model Context Protocol) server that indexes [Across Protocol documentation](https://docs.across.to) and provides AI-powered tools for building crosschain applications.
 
 Connect this server to **Claude Desktop**, **Claude Code**, **Cursor**, **Codex**, **Windsurf**, or any MCP-compatible client to get instant access to Across Protocol docs, API references, code examples, and live bridge fee queries — all without leaving your editor.
 
