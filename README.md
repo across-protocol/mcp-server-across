@@ -2,7 +2,7 @@
 
 An MCP (Model Context Protocol) server that indexes [Across Protocol documentation](https://docs.across.to) and provides AI-powered tools for building crosschain applications.
 
-Connect this server to **Claude Desktop**, **Claude Code**, **Cursor**, **Codex**, **Windsurf**, or any MCP-compatible client to get instant access to Across Protocol docs, API references, code examples, and live bridge fee queries — all without leaving your editor.
+Connect to the **hosted server at `mcp.across.to/mcp`** or run it locally — then use it with **Claude Desktop**, **Claude Code**, **Cursor**, **Codex**, **Windsurf**, or any MCP-compatible client to get instant access to Across Protocol docs, API references, code examples, and live bridge fee queries — all without leaving your editor.
 
 ## What It Does
 
@@ -18,7 +18,105 @@ This server crawls and indexes the entire Across Protocol documentation, then ex
 | `get_code_examples` | Get SDK and integration code examples by topic |
 | `recrawl_docs` | Force a re-crawl to get the latest documentation |
 
-## Quick Start
+## Hosted Server (No Setup Required)
+
+A production instance of this server is hosted at **`https://mcp.across.to/mcp`** using Streamable HTTP transport. You can connect any MCP-compatible client directly — no cloning, building, or running anything locally.
+
+### Claude Desktop
+
+Edit your Claude Desktop config file:
+
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "across-docs": {
+      "url": "https://mcp.across.to/mcp"
+    }
+  }
+}
+```
+
+### Claude Code (CLI)
+
+```bash
+claude mcp add --transport http across-docs https://mcp.across.to/mcp
+```
+
+Or add to `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "across-docs": {
+      "url": "https://mcp.across.to/mcp"
+    }
+  }
+}
+```
+
+### Cursor
+
+Create or edit `.cursor/mcp.json` in your project root (or your global Cursor MCP config):
+
+```json
+{
+  "mcpServers": {
+    "across-docs": {
+      "url": "https://mcp.across.to/mcp"
+    }
+  }
+}
+```
+
+### VS Code (Copilot)
+
+Add to `.vscode/settings.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "across-docs": {
+        "url": "https://mcp.across.to/mcp"
+      }
+    }
+  }
+}
+```
+
+### Codex (OpenAI CLI)
+
+```json
+{
+  "mcpServers": {
+    "across-docs": {
+      "url": "https://mcp.across.to/mcp"
+    }
+  }
+}
+```
+
+### Windsurf
+
+Add to `~/.windsurf/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "across-docs": {
+      "url": "https://mcp.across.to/mcp"
+    }
+  }
+}
+```
+
+---
+
+## Quick Start (Self-Hosted)
 
 ### Prerequisites
 
@@ -38,7 +136,7 @@ The first time the server runs, it will crawl docs.across.to and cache everythin
 
 ---
 
-## Setup by Client
+## Setup by Client (Self-Hosted)
 
 ### Claude Desktop
 
