@@ -6,17 +6,45 @@ Connect to the **hosted server at `mcp.across.to/mcp`** or run it locally — th
 
 ## What It Does
 
-This server crawls and indexes the entire Across Protocol documentation, then exposes it through 7 MCP tools:
+This server is a full MCP citizen for Across Protocol: tools, resources, and prompts.
+
+### Tools
+
+**Docs:**
 
 | Tool | Description |
 |------|-------------|
-| `search_across_docs` | Full-text search across all Across documentation |
-| `get_page` | Fetch the full content of any documentation page |
-| `get_api_reference` | Browse Across REST API endpoints and their details |
-| `get_supported_chains` | List all supported mainnet/testnet chains with chain IDs |
-| `get_bridge_fees` | **Live** query to Across API for real-time bridge fee quotes |
-| `get_code_examples` | Get SDK and integration code examples by topic |
-| `recrawl_docs` | Force a re-crawl to get the latest documentation |
+| `search_across_docs` | TF-IDF search across indexed Across docs |
+| `get_page` | Fetch the full content of a doc page |
+| `get_code_examples` | SDK and integration code examples by topic |
+| `recrawl_docs` | Kick off a non-blocking background re-crawl |
+
+**Live REST API (mainnet + testnet):**
+
+| Tool | Description |
+|------|-------------|
+| `get_supported_chains` | List supported mainnet/testnet chains |
+| `get_api_reference` | Across REST API endpoint catalog |
+| `get_suggested_fees` | Live fee quote for a bridge transfer |
+| `get_swap_quote` | **Returns ready-to-sign calldata** for a crosschain swap |
+| `track_deposit` | Look up the lifecycle state of a deposit |
+| `list_deposits` | List recent deposits for an address |
+| `get_available_routes` | Discover supported (origin, dest, token) routes |
+| `get_limits` | Get min/max transferrable for a route |
+
+All action tools return structured content (typed JSON) in addition to a human-readable text payload.
+
+### Resources
+
+Every cached doc page is exposed as an MCP resource under `across://docs/{path}`. Plus:
+
+- `across://reference/chains` — supported chains as JSON
+- `across://reference/api` — REST API endpoint catalog as JSON
+
+### Prompts
+
+- `build_crosschain_swap` — guided workflow that confirms route + limits, then produces signable calldata
+- `diagnose_deposit` — looks up a deposit and recommends a next action
 
 ## Hosted Server (No Setup Required)
 
@@ -361,7 +389,7 @@ src/
 
 **Dependencies are minimal:**
 - `@modelcontextprotocol/sdk` — MCP protocol
-- `cheerio` — HTML parsing
+- `htmlparser2` + `domutils` + `dom-serializer` — HTML parsing
 - `zod` — Schema validation
 
 ---

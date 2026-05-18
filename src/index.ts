@@ -14,7 +14,6 @@ async function main() {
   const store = new DocStore();
   const searchEngine = new SearchEngine();
 
-  // Try loading cached docs from disk
   const loaded = store.loadFromDisk();
   if (loaded && store.pageCount() > 0) {
     console.error(
@@ -23,8 +22,27 @@ async function main() {
     searchEngine.index(store.getAllPages());
   }
 
+  function triggerRecrawl(): void {
+    if (store.isCrawling()) return;
+    store.setCrawling(true);
+    console.error("[across-mcp] Starting background crawl...");
+    crawlDocs(store, (current, total, url) => {
+      console.error(`[across-mcp] Crawling ${current}/${total}: ${url}`);
+    })
+      .then((count) => {
+        searchEngine.index(store.getAllPages());
+        console.error(`[across-mcp] Crawl complete: ${count} pages indexed`);
+      })
+      .catch((err) => {
+        console.error("[across-mcp] Crawl failed:", err);
+      })
+      .finally(() => {
+        store.setCrawling(false);
+      });
+  }
+
   // HTTP server — each request gets its own stateless MCP transport.
-  // store + searchEngine are shared singletons across all requests.
+  // store + searchEngine + triggerRecrawl are shared singletons across all requests.
   const httpServer = createHttpServer(async (req, res) => {
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "text/plain" });
@@ -36,7 +54,7 @@ async function main() {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined, // stateless — no session tracking needed
       });
-      const mcpServer = createMcpServer(store, searchEngine);
+      const mcpServer = createMcpServer({ store, searchEngine, triggerRecrawl });
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res);
       return;
@@ -50,31 +68,13 @@ async function main() {
     console.error(`[across-mcp] HTTP server listening on port ${PORT}`);
   });
 
-  // Crawl in background if cache is stale or missing
   if (!loaded || store.pageCount() === 0 || store.needsRecrawl()) {
-    console.error("[across-mcp] Starting background crawl...");
-    crawlDocs(store, (current, total, url) => {
-      console.error(`[across-mcp] Crawling ${current}/${total}: ${url}`);
-    })
-      .then((count) => {
-        console.error(`[across-mcp] Crawl complete: ${count} pages indexed`);
-        searchEngine.index(store.getAllPages());
-      })
-      .catch((err) => {
-        console.error("[across-mcp] Crawl failed:", err);
-      });
+    triggerRecrawl();
   }
 
-  // Schedule periodic re-crawl
-  setInterval(async () => {
-    console.error("[across-mcp] Starting scheduled re-crawl...");
-    try {
-      const count = await crawlDocs(store);
-      searchEngine.index(store.getAllPages());
-      console.error(`[across-mcp] Scheduled re-crawl complete: ${count} pages`);
-    } catch (err) {
-      console.error("[across-mcp] Scheduled re-crawl failed:", err);
-    }
+  setInterval(() => {
+    console.error("[across-mcp] Scheduled re-crawl tick");
+    triggerRecrawl();
   }, RECRAWL_INTERVAL_MS);
 }
 

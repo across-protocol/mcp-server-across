@@ -1,6 +1,6 @@
 {
   "name": "mcp-server-across",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "MCP server that indexes Across Protocol documentation for AI-powered cross-chain development",
   "type": "module",
   "main": "dist/index.js",
@@ -10,8 +10,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc --watch",
-    "crawl": "node dist/crawler.js --standalone"
+    "dev": "tsc --watch"
   },
   "keywords": [
     "mcp",
