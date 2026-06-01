@@ -6,17 +6,64 @@ Connect to the **hosted server at `mcp.across.to/mcp`** or run it locally — th
 
 ## What It Does
 
-This server crawls and indexes the entire Across Protocol documentation, then exposes it through 7 MCP tools:
+This server is a full MCP citizen for Across Protocol: tools, resources, and prompts.
+
+### Tools
+
+**Docs:**
 
 | Tool | Description |
 |------|-------------|
-| `search_across_docs` | Full-text search across all Across documentation |
-| `get_page` | Fetch the full content of any documentation page |
-| `get_api_reference` | Browse Across REST API endpoints and their details |
-| `get_supported_chains` | List all supported mainnet/testnet chains with chain IDs |
-| `get_bridge_fees` | **Live** query to Across API for real-time bridge fee quotes |
-| `get_code_examples` | Get SDK and integration code examples by topic |
-| `recrawl_docs` | Force a re-crawl to get the latest documentation |
+| `search_across_docs` | TF-IDF search across indexed Across docs |
+| `get_page` | Fetch the full content of a doc page |
+| `get_code_examples` | SDK and integration code examples by topic |
+| `recrawl_docs` | Kick off a non-blocking background re-crawl |
+
+**Live REST API (mainnet + testnet):**
+
+| Tool | Description |
+|------|-------------|
+| `get_supported_chains` | List supported mainnet/testnet chains |
+| `get_api_reference` | Across REST API endpoint catalog |
+| `get_suggested_fees` | Live fee quote for a bridge transfer |
+| `get_swap_quote` | **Returns ready-to-sign calldata** for a crosschain swap |
+| `track_deposit` | Look up the lifecycle state of a deposit |
+| `list_deposits` | List recent deposits for an address |
+| `get_available_routes` | Discover supported (origin, dest, token) routes |
+| `get_limits` | Get min/max transferrable for a route |
+
+All action tools return structured content (typed JSON) in addition to a human-readable text payload.
+
+**Interactive (MCP Apps — Claude web & other UI-capable clients):**
+
+| Tool | Description |
+|------|-------------|
+| `swap_with_wallet` | Opens an **interactive swap view inside the conversation**. Fetches a live Across quote, shows route/fees with a mandatory verify-before-sign step and a quote-expiry countdown, connects the user's wallet via **WalletConnect**, has the user sign the approval + deposit in their own wallet, then tracks fill status live. |
+
+> **The server never holds keys or signs anything.** Every transaction is signed client-side by the user's own wallet, inside the sandboxed iframe. This follows the same model as other production crypto MCP servers.
+
+This tool is built with [MCP Apps](https://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps/) (`@modelcontextprotocol/ext-apps`). The UI is bundled into a single HTML resource (`ui://across/swap.html`) and rendered by the host in a sandboxed iframe.
+
+### Environment variables
+
+Both are **public client identifiers** (the integrator ID rides in API query params; the WalletConnect project ID ships inside the browser bundle), so the repo includes working defaults. Override them only if you want your own.
+
+| Variable | Affects | Notes |
+|----------|---------|-------|
+| `ACROSS_INTEGRATOR_ID` | `get_swap_quote`, `swap_with_wallet` | 2-byte hex integrator ID mandated by the Across Swap API for mainnet. Read at runtime; defaults to `0x00a8`. |
+| `WC_PROJECT_ID` | `swap_with_wallet` UI | WalletConnect/Reown project id, **baked into the UI at build time** (`WC_PROJECT_ID=… npm run build`, or `docker build --build-arg WC_PROJECT_ID=…`). Has a default. The sandboxed iframe can't use an injected wallet, so WalletConnect is required. |
+
+### Resources
+
+Every cached doc page is exposed as an MCP resource under `across://docs/{path}`. Plus:
+
+- `across://reference/chains` — supported chains as JSON
+- `across://reference/api` — REST API endpoint catalog as JSON
+
+### Prompts
+
+- `build_crosschain_swap` — guided workflow that confirms route + limits, then produces signable calldata
+- `diagnose_deposit` — looks up a deposit and recommends a next action
 
 ## Hosted Server (No Setup Required)
 
@@ -133,6 +180,28 @@ npm run build
 ```
 
 The first time the server runs, it will crawl docs.across.to and cache everything locally to `~/.across-mcp/cache.json`. Subsequent starts load from cache instantly and re-crawl in the background every 24 hours.
+
+### Run without cloning (npx)
+
+Once published, you can run the server with no local checkout — point any stdio client at:
+
+```json
+{
+  "mcpServers": {
+    "across-docs": {
+      "command": "npx",
+      "args": ["-y", "mcp-server-across"]
+    }
+  }
+}
+```
+
+### Transport modes
+
+The server speaks two transports from the same entrypoint:
+
+- **stdio (default)** — used when launched as a local child process (the `command`/`args` configs below, `npx`, or `claude mcp add`). This is what local clients expect.
+- **Streamable HTTP** — opt in with `--http`, `MCP_TRANSPORT=http`, or by setting `PORT`. This powers the hosted instance at `https://mcp.across.to/mcp` and serves `/mcp` plus a `/health` check.
 
 ---
 
@@ -275,22 +344,24 @@ npm run build
 
 ### Docker
 
+The image runs in **HTTP mode** by default (it sets `MCP_TRANSPORT=http` and exposes port 8080) — this is the hosted-deployment shape.
+
 ```bash
 # Build the image
 docker build -t mcp-server-across .
 
-# Run (stdio mode — for use with Docker-aware MCP clients)
-docker run -i mcp-server-across
+# Run the HTTP server (Streamable HTTP at /mcp, health at /health)
+docker run -p 8080:8080 mcp-server-across
 ```
 
-For Claude Desktop with Docker:
+To run the container in **stdio mode** instead (for Docker-aware MCP clients that launch it as a child process), override the transport env:
 
 ```json
 {
   "mcpServers": {
     "across-docs": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "mcp-server-across"]
+      "args": ["run", "-i", "--rm", "-e", "MCP_TRANSPORT=stdio", "mcp-server-across"]
     }
   }
 }
@@ -299,12 +370,12 @@ For Claude Desktop with Docker:
 To persist the cache across container restarts:
 
 ```bash
-docker run -i -v across-mcp-cache:/root/.across-mcp mcp-server-across
+docker run -p 8080:8080 -v across-mcp-cache:/root/.across-mcp mcp-server-across
 ```
 
 ### Cloud Deployment (Railway / Fly.io / AWS)
 
-For remote deployment, the server uses stdio transport which works with cloud-hosted MCP proxies. You can deploy to any cloud provider:
+For remote deployment, the server runs in Streamable HTTP mode (set automatically in the Docker image, or via `MCP_TRANSPORT=http`/`PORT`) and serves `/mcp` directly — no proxy needed. You can deploy to any cloud provider:
 
 **Railway:**
 ```bash
@@ -324,7 +395,7 @@ fly deploy
 
 **AWS/GCP/Azure:** Deploy the Docker image to your container service of choice (ECS, Cloud Run, Container Apps).
 
-> Note: For remote MCP servers, you'll need an MCP proxy layer or use Streamable HTTP transport. Most MCP clients currently support stdio (local) transport best.
+> Note: Remote/hosted deployments use Streamable HTTP transport (the `/mcp` endpoint). Local clients launch the server over stdio. Both are served by the same entrypoint — see [Transport modes](#transport-modes).
 
 ### npm Global Install
 
@@ -361,7 +432,7 @@ src/
 
 **Dependencies are minimal:**
 - `@modelcontextprotocol/sdk` — MCP protocol
-- `cheerio` — HTML parsing
+- `htmlparser2` + `domutils` + `dom-serializer` — HTML parsing
 - `zod` — Schema validation
 
 ---

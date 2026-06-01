@@ -22,9 +22,26 @@ const CACHE_DIR = join(homedir(), ".across-mcp");
 const CACHE_FILE = join(CACHE_DIR, "cache.json");
 const STORE_VERSION = 1;
 
+export type CrawlState = "idle" | "indexing" | "ready" | "stale";
+
 export class DocStore {
   private pages: Map<string, DocPage> = new Map();
   private lastFullCrawl: Date | null = null;
+  private crawlInFlight: boolean = false;
+
+  isCrawling(): boolean {
+    return this.crawlInFlight;
+  }
+
+  setCrawling(value: boolean): void {
+    this.crawlInFlight = value;
+  }
+
+  getState(): CrawlState {
+    if (this.crawlInFlight) return "indexing";
+    if (this.pages.size === 0) return "idle";
+    return this.needsRecrawl() ? "stale" : "ready";
+  }
 
   loadFromDisk(): boolean {
     try {

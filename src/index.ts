@@ -2,19 +2,27 @@
 
 import { createServer as createHttpServer } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { DocStore } from "./store.js";
 import { SearchEngine } from "./search.js";
 import { crawlDocs } from "./crawler.js";
-import { createServer as createMcpServer } from "./server.js";
+import { createServer as createMcpServer, type ServerDeps } from "./server.js";
 
-const PORT = Number(process.env.PORT) || 8080;
 const RECRAWL_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-async function main() {
+// IMPORTANT: every log in this process MUST go to stderr (console.error).
+// In stdio mode, stdout carries the JSON-RPC stream — a stray console.log
+// would corrupt the protocol and break the connection.
+
+/**
+ * Shared setup used by both transports: doc store, search index, and the
+ * background crawl machinery. Returns the deps a McpServer needs plus a
+ * `triggerRecrawl` hook the recrawl tool calls.
+ */
+function bootstrap(): ServerDeps {
   const store = new DocStore();
   const searchEngine = new SearchEngine();
 
-  // Try loading cached docs from disk
   const loaded = store.loadFromDisk();
   if (loaded && store.pageCount() > 0) {
     console.error(
@@ -23,8 +31,60 @@ async function main() {
     searchEngine.index(store.getAllPages());
   }
 
-  // HTTP server — each request gets its own stateless MCP transport.
-  // store + searchEngine are shared singletons across all requests.
+  function triggerRecrawl(): void {
+    if (store.isCrawling()) return;
+    store.setCrawling(true);
+    console.error("[across-mcp] Starting background crawl...");
+    crawlDocs(store, (current, total, url) => {
+      console.error(`[across-mcp] Crawling ${current}/${total}: ${url}`);
+    })
+      .then((count) => {
+        searchEngine.index(store.getAllPages());
+        console.error(`[across-mcp] Crawl complete: ${count} pages indexed`);
+      })
+      .catch((err) => {
+        console.error("[across-mcp] Crawl failed:", err);
+      })
+      .finally(() => {
+        store.setCrawling(false);
+      });
+  }
+
+  // Kick off an initial crawl if we have nothing cached or the cache is stale.
+  // Runs in the background — never blocks transport startup. Tools surface a
+  // warmup hint while the index is empty.
+  if (!loaded || store.pageCount() === 0 || store.needsRecrawl()) {
+    triggerRecrawl();
+  }
+
+  setInterval(() => {
+    console.error("[across-mcp] Scheduled re-crawl tick");
+    triggerRecrawl();
+  }, RECRAWL_INTERVAL_MS);
+
+  return { store, searchEngine, triggerRecrawl };
+}
+
+/**
+ * stdio transport — the default. One long-lived McpServer bound to the
+ * process's stdin/stdout, for local clients that launch this as a child
+ * process (Claude Desktop/Code, Cursor, `npx mcp-server-across`).
+ */
+async function runStdio(deps: ServerDeps): Promise<void> {
+  const mcpServer = createMcpServer(deps);
+  const transport = new StdioServerTransport();
+  await mcpServer.connect(transport);
+  console.error("[across-mcp] stdio transport ready");
+}
+
+/**
+ * Streamable-HTTP transport — opt-in. Powers the hosted deployment.
+ * Each request gets its own stateless MCP transport; the deps (store,
+ * search index, recrawl hook) are shared singletons across requests.
+ */
+function runHttp(deps: ServerDeps): void {
+  const port = Number(process.env.PORT) || 8080;
+
   const httpServer = createHttpServer(async (req, res) => {
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "text/plain" });
@@ -36,7 +96,7 @@ async function main() {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined, // stateless — no session tracking needed
       });
-      const mcpServer = createMcpServer(store, searchEngine);
+      const mcpServer = createMcpServer(deps);
       await mcpServer.connect(transport);
       await transport.handleRequest(req, res);
       return;
@@ -46,36 +106,31 @@ async function main() {
     res.end("Not found");
   });
 
-  httpServer.listen(PORT, () => {
-    console.error(`[across-mcp] HTTP server listening on port ${PORT}`);
+  httpServer.listen(port, () => {
+    console.error(`[across-mcp] HTTP server listening on port ${port}`);
   });
+}
 
-  // Crawl in background if cache is stale or missing
-  if (!loaded || store.pageCount() === 0 || store.needsRecrawl()) {
-    console.error("[across-mcp] Starting background crawl...");
-    crawlDocs(store, (current, total, url) => {
-      console.error(`[across-mcp] Crawling ${current}/${total}: ${url}`);
-    })
-      .then((count) => {
-        console.error(`[across-mcp] Crawl complete: ${count} pages indexed`);
-        searchEngine.index(store.getAllPages());
-      })
-      .catch((err) => {
-        console.error("[across-mcp] Crawl failed:", err);
-      });
+/**
+ * Transport selection: default to stdio. Use HTTP when `--http` is passed,
+ * `MCP_TRANSPORT=http`, or `PORT` is set (so existing Docker/hosted deploys
+ * that export PORT keep serving HTTP unchanged).
+ */
+function useHttp(): boolean {
+  return (
+    process.argv.includes("--http") ||
+    process.env.MCP_TRANSPORT === "http" ||
+    process.env.PORT !== undefined
+  );
+}
+
+async function main(): Promise<void> {
+  const deps = bootstrap();
+  if (useHttp()) {
+    runHttp(deps);
+  } else {
+    await runStdio(deps);
   }
-
-  // Schedule periodic re-crawl
-  setInterval(async () => {
-    console.error("[across-mcp] Starting scheduled re-crawl...");
-    try {
-      const count = await crawlDocs(store);
-      searchEngine.index(store.getAllPages());
-      console.error(`[across-mcp] Scheduled re-crawl complete: ${count} pages`);
-    } catch (err) {
-      console.error("[across-mcp] Scheduled re-crawl failed:", err);
-    }
-  }, RECRAWL_INTERVAL_MS);
 }
 
 main().catch((err) => {
