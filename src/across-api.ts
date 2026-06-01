@@ -73,8 +73,18 @@ export interface SwapQuoteParams {
   depositor: string;
   recipient?: string;
   tradeType?: "exactInput" | "exactOutput" | "minOutput";
-  slippageTolerance?: number;
+  /** `"auto"` (default) or a decimal slippage value between 0 and 1. */
+  slippage?: string;
   network?: Network;
+}
+
+/**
+ * Across mandates a 2-byte hex integrator ID on production/mainnet swap calls.
+ * It's a public identifier (sent as a query param), so a default is fine;
+ * override with ACROSS_INTEGRATOR_ID in the environment if needed.
+ */
+function integratorId(): string {
+  return process.env.ACROSS_INTEGRATOR_ID || "0x00a8";
 }
 
 export function getSwapQuote(p: SwapQuoteParams) {
@@ -86,8 +96,9 @@ export function getSwapQuote(p: SwapQuoteParams) {
     amount: p.amount,
     depositor: p.depositor,
     recipient: p.recipient ?? p.depositor,
-    tradeType: p.tradeType,
-    slippageTolerance: p.slippageTolerance,
+    tradeType: p.tradeType ?? "minOutput",
+    slippage: p.slippage ?? "auto",
+    integratorId: integratorId(),
   });
 }
 

@@ -2,6 +2,14 @@ import {
   McpServer,
   ResourceTemplate,
 } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  registerAppTool,
+  registerAppResource,
+  RESOURCE_MIME_TYPE,
+} from "@modelcontextprotocol/ext-apps/server";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import { DocStore } from "./store.js";
 import { SearchEngine } from "./search.js";
@@ -24,6 +32,7 @@ When the user asks anything about Across (bridging, crosschain swaps, intents, r
 
 - For conceptual or "how do I..." questions: call \`search_across_docs\` first.
 - For building a transaction: call \`get_swap_quote\` — it returns ready-to-sign calldata for the user's wallet. Never invent quotes or calldata yourself.
+- When the user wants to actually execute a swap (and the client supports interactive UI), call \`swap_with_wallet\` — it opens an in-conversation view where the user verifies details, connects a wallet via WalletConnect, and signs the deposit themselves. The deposit is never signed server-side.
 - For tracking a bridge in progress: call \`track_deposit\`.
 - For route/limit/fee discovery: \`get_available_routes\`, \`get_limits\`, \`get_suggested_fees\`.
 - Doc pages are also exposed as MCP resources under \`across://docs/{path}\` — list/read them directly for citations.
@@ -58,8 +67,159 @@ export function createServer(deps: ServerDeps): McpServer {
   registerPrompts(server);
   registerDocTools(server, store, searchEngine, triggerRecrawl);
   registerActionTools(server);
+  registerSwapApp(server);
 
   return server;
+}
+
+// ─── Swap MCP App (interactive UI + wallet execution) ───────────────────
+
+const SWAP_UI_URI = "ui://across/swap.html";
+
+// The bundled iframe app, produced by `npm run build` (scripts/build-ui.mjs).
+// dist/server.js sits next to dist/ui/swap.html.
+const UI_DIR = join(dirname(fileURLToPath(import.meta.url)), "ui");
+let SWAP_UI_HTML: string;
+try {
+  SWAP_UI_HTML = readFileSync(join(UI_DIR, "swap.html"), "utf-8");
+} catch {
+  SWAP_UI_HTML =
+    "<!doctype html><html><body><p>Swap UI bundle not found. Run <code>npm run build</code> (which runs build:ui).</p></body></html>";
+}
+
+// CSP origins the iframe needs. The HTML runs in a sandboxed cross-origin
+// iframe with no same-origin server, so EVERY origin must be declared.
+const SWAP_UI_CSP = {
+  // fetch / XHR / WebSocket: Across API, WalletConnect + RPC + explorer.
+  // The relay is a WebSocket — CSP connect-src is scheme-specific, so the
+  // wss:// origins must be listed explicitly (an https:// entry won't cover them).
+  connectDomains: [
+    "https://app.across.to",
+    "wss://relay.walletconnect.org",
+    "wss://relay.walletconnect.com",
+    "https://relay.walletconnect.com",
+    "https://rpc.walletconnect.com",
+    "https://rpc.walletconnect.org",
+    "https://explorer-api.walletconnect.com",
+    "https://api.web3modal.org",
+    "https://pulse.walletconnect.org",
+  ],
+  // images / fonts for the WalletConnect modal (wallet icons, etc.).
+  resourceDomains: [
+    "https://explorer-api.walletconnect.com",
+    "https://api.web3modal.org",
+    "https://imagedelivery.net",
+    "https://*.walletconnect.com",
+    "https://*.walletconnect.org",
+  ],
+};
+
+function registerSwapApp(server: McpServer): void {
+  // The interactive UI resource.
+  registerAppResource(
+    server,
+    "Across Swap UI",
+    SWAP_UI_URI,
+    {
+      description:
+        "Interactive crosschain-swap view: confirm route/fees, connect a wallet via WalletConnect, sign the deposit, and watch fill status.",
+      _meta: { ui: { csp: SWAP_UI_CSP, prefersBorder: true } },
+    },
+    async (uri) => ({
+      contents: [
+        {
+          uri: uri.toString(),
+          mimeType: RESOURCE_MIME_TYPE,
+          text: SWAP_UI_HTML,
+          _meta: { ui: { csp: SWAP_UI_CSP } },
+        },
+      ],
+    })
+  );
+
+  // The model-facing tool that opens the swap view. Mainnet only.
+  registerAppTool(
+    server,
+    "swap_with_wallet",
+    {
+      title: "Swap with wallet (interactive)",
+      description:
+        "Open an interactive crosschain-swap view in the conversation. Fetches a live Across quote and renders a UI where the user verifies details, connects their wallet, and signs the deposit themselves. Use this when the user wants to actually execute a swap (not just see calldata). Mainnet only.",
+      inputSchema: {
+        inputToken: z.string().describe("Input token address on origin chain"),
+        outputToken: z.string().describe("Output token address on destination chain"),
+        originChainId: z.number(),
+        destinationChainId: z.number(),
+        amount: z.string().describe("Amount in smallest unit; interpretation depends on tradeType"),
+        depositor: z.string().describe("Address that will sign and submit the deposit"),
+        recipient: z.string().optional().describe("Recipient on destination chain (defaults to depositor)"),
+        tradeType: z
+          .enum(["exactInput", "exactOutput", "minOutput"])
+          .optional()
+          .describe("Trade type (default minOutput)"),
+        slippage: z
+          .string()
+          .optional()
+          .describe("'auto' (default) or a decimal between 0 and 1"),
+      },
+      _meta: { ui: { resourceUri: SWAP_UI_URI } },
+    },
+    async (args) => {
+      try {
+        const quote = await AcrossApi.getSwapQuote({ ...args, network: "mainnet" });
+        const structured = {
+          ...(quote as Record<string, unknown>),
+          _input: {
+            inputToken: args.inputToken,
+            outputToken: args.outputToken,
+            originChainId: args.originChainId,
+            destinationChainId: args.destinationChainId,
+            amount: args.amount,
+          },
+        };
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                "Opened the interactive Across swap view. The user reviews the route and fees, verifies the transaction details, connects a wallet via WalletConnect, and signs the deposit in their own wallet. The deposit is never signed server-side.",
+            },
+          ],
+          structuredContent: structured,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: `Could not build swap quote: ${msg}` }], isError: true };
+      }
+    }
+  );
+
+  // App-only tool the iframe polls for deposit status. Hidden from the model.
+  registerAppTool(
+    server,
+    "track_deposit_app",
+    {
+      title: "Track deposit (app)",
+      description: "Internal: deposit-status lookup used by the swap UI to poll fill progress.",
+      inputSchema: {
+        depositTxHash: z.string(),
+        originChainId: z.number(),
+      },
+      _meta: { ui: { visibility: ["app"] } },
+    },
+    async (args) => {
+      try {
+        const data = await AcrossApi.trackDeposit({ ...args, network: "mainnet" });
+        return {
+          content: [{ type: "text", text: "```json\n" + JSON.stringify(data, null, 2) + "\n```" }],
+          structuredContent: data as Record<string, unknown>,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+      }
+    }
+  );
 }
 
 // ─── Resources ──────────────────────────────────────────────────────
@@ -470,11 +630,11 @@ function registerActionTools(server: McpServer): void {
         tradeType: z
           .enum(["exactInput", "exactOutput", "minOutput"])
           .optional()
-          .describe("Trade type (default exactInput)"),
-        slippageTolerance: z
-          .number()
+          .describe("Trade type (default minOutput, Across's recommended default)"),
+        slippage: z
+          .string()
           .optional()
-          .describe("Slippage tolerance as a percentage (e.g. 1 = 1%)"),
+          .describe("'auto' (default) or a decimal between 0 and 1 (e.g. '0.01' = 1%)"),
         network: networkSchema,
       },
     },

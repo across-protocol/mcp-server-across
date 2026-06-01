@@ -7,11 +7,24 @@
   "bin": {
     "mcp-server-across": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:ui",
+    "build:ui": "node scripts/build-ui.mjs",
     "start": "node dist/index.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepare": "npm run build"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/across-protocol/mcp-server-across.git"
+  },
+  "bugs": {
+    "url": "https://github.com/across-protocol/mcp-server-across/issues"
+  },
+  "homepage": "https://github.com/across-protocol/mcp-server-across#readme",
   "keywords": [
     "mcp",
     "across-protocol",
@@ -24,14 +37,17 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "htmlparser2": "^9.1.0",
-    "domutils": "^3.1.0",
+    "@modelcontextprotocol/ext-apps": "^1.7.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@walletconnect/ethereum-provider": "^2.23.9",
     "dom-serializer": "^2.0.0",
-    "zod": "^3.23.0"
+    "domutils": "^3.1.0",
+    "htmlparser2": "^9.1.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "esbuild": "^0.28.0",
     "typescript": "^5.3.0"
   },
   "engines": {
